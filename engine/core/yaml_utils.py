@@ -21,9 +21,10 @@ __all__ = [
 INCLUDE_KEY = '__include__'
 
 
-def load_config(file_path, cfg=dict()):
-    """load config
-    """
+def load_config(file_path, cfg=None):
+    """load config. Keep independent config trees separate, including student and teacher."""
+    if cfg is None:
+        cfg = {}
     _, ext = os.path.splitext(file_path)
     assert ext in ['.yml', '.yaml'], "only support yaml files"
 

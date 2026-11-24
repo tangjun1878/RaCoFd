@@ -27,7 +27,7 @@ class DetSolver(BaseSolver):
         args = self.cfg
 
         n_parameters, model_stats = stats(self.cfg)
-        print(model_stats)
+        print(model_stats) # 这个地方打印输出
         print("-"*42 + "Start training" + "-"*43)
 
         self.self_lr_scheduler = False
@@ -89,7 +89,8 @@ class DetSolver(BaseSolver):
                 scaler=self.scaler,
                 lr_warmup_scheduler=self.lr_warmup_scheduler,
                 writer=self.writer,
-                teacher_model=self.teacher_model, # NEW: Pass teacher model to train_one_epoch
+                teacher_model=self.teacher_model,
+                teacher_detect_model=self.teacher_detect_model,
             )
 
             if not self.self_lr_scheduler:  # update by epoch 

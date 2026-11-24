@@ -44,7 +44,7 @@ class BaseSolver(object):
             50, 25, 75, 98, 153, 37, 73, 115, 132, 106, 61, 163, 134, 277, 81, 133, 18, 94, 30,
             169, 70, 328, 226
         ]
-    def _setup(self):
+    def _setup(self, train_mode: bool = True):
         """Avoid instantiating unnecessary classes"""
         cfg = self.cfg
         if cfg.device:
@@ -55,7 +55,14 @@ class BaseSolver(object):
         self.model = cfg.model
 
         # Setup teacher model
-        self.teacher_model = to(cfg.teacher_model, device)
+        # No teacher instantiation for validation/test-only/inference.
+        # Both teachers are training-time supervisors only.
+        self.teacher_model = to(cfg.teacher_model, device) if train_mode else None
+        self.teacher_detect_model = to(cfg.teacher_detect_model, device) if train_mode else None
+        for teacher in (self.teacher_model, self.teacher_detect_model):
+            if teacher is not None:
+                teacher.eval()
+                teacher.requires_grad_(False)
 
         # NOTE: Must load_tuning_state before EMA instance building
         if self.cfg.tuning:
@@ -109,7 +116,7 @@ class BaseSolver(object):
             self.load_resume_state(self.cfg.resume)
 
     def eval(self):
-        self._setup()
+        self._setup(train_mode=False)
 
         self.val_dataloader = dist_utils.warp_loader(
             self.cfg.val_dataloader, shuffle=self.cfg.val_dataloader.shuffle
@@ -133,6 +140,8 @@ class BaseSolver(object):
         state['last_epoch'] = self.last_epoch
 
         for k, v in self.__dict__.items():
+            if k in ('teacher_model', 'teacher_detect_model'):
+                continue  # teachers are reloaded from their original checkpoints
             if hasattr(v, 'state_dict'):
                 v = dist_utils.de_parallel(v)
                 state[k] = v.state_dict()
@@ -146,6 +155,8 @@ class BaseSolver(object):
             print('Load last_epoch')
 
         for k, v in self.__dict__.items():
+            if k in ('teacher_model', 'teacher_detect_model'):
+                continue
             if hasattr(v, 'load_state_dict') and k in state:
                 v = dist_utils.de_parallel(v)
                 v.load_state_dict(state[k])

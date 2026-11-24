@@ -1,0 +1,61 @@
+# RaCoFD (research implementation based on the exact uploaded RT-DETRv4 tree).
+# The two teachers are frozen and only used during training.
+# Required: download DINOv3-B and RT-DETRv4-X (HGNetv2-B5) COCO checkpoints.
+__include__: [
+  '../rtv4/rtv4_hgnetv2_s_coco.yml',
+]
+
+output_dir: ./runs/racofd_hgnetv2_s_coco
+criterion: RaCoFDCriterion
+
+# Pretrained/finetuned detector checkpoint is mandatory. No random X teacher.
+teacher_detect_model:
+  type: RaCoFDDetectionTeacher
+  config_path: configs/rtv4/rtv4_hgnetv2_x_coco.yml
+  checkpoint_path: pretrain/RTv4-X-hgnet.pth
+  checkpoint_prefer_ema: True
+  minimum_checkpoint_coverage: 0.95
+  return_features: False # change to True when detector_feature_kd=True
+
+# DINOv3 is inherited from ../rtv4/rtv4_hgnetv2_s_coco.yml.
+HybridEncoder:
+  distill_teacher_dim: 768
+  racofd_expose_f5: True
+
+# Keep all original RT-DETRv4 task losses and its DSI/GAM schedule.
+# The weight for 'loss_distill' is already applied inside RTv4Criterion.
+RaCoFDCriterion:
+  matcher:
+    type: HungarianMatcher
+    weight_dict: {cost_class: 2, cost_bbox: 5, cost_giou: 2}
+    alpha: 0.25
+    gamma: 2.0
+  weight_dict: {loss_mal: 1.0, loss_bbox: 5.0, loss_giou: 2.0, loss_fgl: 0.15, loss_ddf: 1.5, loss_distill: 5.0}
+  losses: ['mal', 'boxes', 'local', 'distill']
+  alpha: 0.75
+  gamma: 1.5
+  reg_max: 32
+  distill_adaptive_params:
+    enabled: True
+    rho: 11
+    delta: 1
+    default_weight: 20
+  racofd:
+    detector_kd: True
+    cls_weight: 2.0
+    box_weight: 2.0
+    cls_min_conf: 0.1
+    box_min_iou: 0.3
+    temperature: 2.0
+    instance_vfm: True
+    instance_weight: 0.5
+    flip_consistency: True
+    stability_temperature: 0.5
+    gradient_evidence: True
+    gradient_interval: 4
+    gradient_momentum: 0.9
+    complement_alpha: 1.0
+    max_extra_weight: 2.0
+    roi_output_size: 2
+    detector_feature_kd: False
+    detector_feature_weight: 0.1

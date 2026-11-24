@@ -1,0 +1,9 @@
+# Ablation: original DINOv3 DSI/GAM + RT-DETRv4-X cls/box KD only.
+__include__: ['./racofd_hgnetv2_s_coco.yml']
+output_dir: ./runs/racofd_hgnetv2_s_coco_naive_dual
+RaCoFDCriterion:
+  racofd:
+    reliability_filtering: False
+    instance_vfm: False
+    gradient_evidence: False
+    flip_consistency: False

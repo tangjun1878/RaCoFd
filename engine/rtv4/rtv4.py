@@ -30,9 +30,14 @@ class RTv4(nn.Module):
         encoder_output = self.encoder(x_backbone)
         # tuple: (fpn_features, student_distill_output) or fpn_features (list) if not training or distillation is off.
 
-        student_distill_output = None
-        if self.training and isinstance(encoder_output, tuple) and len(encoder_output) == 2:
-            x_fpn_features, student_distill_output = encoder_output
+        student_distill_output, racofd_shared_f5 = None, None
+        if self.training and isinstance(encoder_output, tuple):
+            if len(encoder_output) == 3:
+                x_fpn_features, student_distill_output, racofd_shared_f5 = encoder_output
+            elif len(encoder_output) == 2:
+                x_fpn_features, student_distill_output = encoder_output
+            else:
+                raise ValueError(f"Unexpected HybridEncoder output tuple: {len(encoder_output)}")
         else:
             x_fpn_features = encoder_output
 
@@ -41,6 +46,10 @@ class RTv4(nn.Module):
         if self.training and student_distill_output is not None and teacher_encoder_output is not None:
             x_decoder_out['student_distill_output'] = student_distill_output
             x_decoder_out['teacher_encoder_output'] = teacher_encoder_output
+        if self.training and racofd_shared_f5 is not None:
+            x_decoder_out['racofd_shared_f5'] = racofd_shared_f5
+            # Optional detector feature KD, automatically removed in inference.
+            x_decoder_out['racofd_detection_f5'] = x_fpn_features[-1]
 
         return x_decoder_out
 

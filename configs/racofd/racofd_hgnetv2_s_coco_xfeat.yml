@@ -1,0 +1,10 @@
+# Optional experiment: also distill detector F5 spatial energy map.
+# RT-DETRv4-X cls+box KD remain mandatory.
+__include__: ['./racofd_hgnetv2_s_coco.yml']
+output_dir: ./runs/racofd_hgnetv2_s_coco_xfeat
+teacher_detect_model:
+  return_features: True
+RaCoFDCriterion:
+  racofd:
+    detector_feature_kd: True
+    detector_feature_weight: 0.1

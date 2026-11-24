@@ -79,6 +79,17 @@ class YAMLConfig(BaseConfig):
         return super().teacher_model
 
     @property
+    def teacher_detect_model(self, ) -> torch.nn.Module:
+        if self._teacher_detect_model is None and 'teacher_detect_model' in self.yaml_cfg:
+            from ..RaCoFD.detection_teacher import RaCoFDDetectionTeacher
+            teacher_cfg = copy.deepcopy(self.yaml_cfg['teacher_detect_model'])
+            model_type = teacher_cfg.pop('type', None)
+            if model_type != 'RaCoFDDetectionTeacher':
+                raise ValueError(f"Unsupported detector teacher: {model_type}")
+            self._teacher_detect_model = RaCoFDDetectionTeacher(**teacher_cfg)
+        return super().teacher_detect_model
+
+    @property
     def postprocessor(self, ) -> torch.nn.Module:
         if self._postprocessor is None and 'postprocessor' in self.yaml_cfg:
             self._postprocessor = create(self.yaml_cfg['postprocessor'], self.global_cfg)

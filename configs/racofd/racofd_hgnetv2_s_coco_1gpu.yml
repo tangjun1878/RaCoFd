@@ -1,0 +1,22 @@
+# Single GPU RaCoFD S config. Keep RaCoFD criterion; do not include RTv4 config again.
+__include__: [
+  './racofd_hgnetv2_s_coco.yml',
+]
+output_dir: ./runs/coco/demo
+
+train_dataloader:
+  total_batch_size: 24
+  num_workers: 4
+val_dataloader:
+  total_batch_size: 24
+  num_workers: 4
+optimizer:
+  type: AdamW
+  params:
+    - params: '^(?=.*backbone)(?!.*bn).*$'
+      lr: 0.0001
+    - params: '^(?=.*(?:norm|bn)).*$'
+      weight_decay: 0.
+  lr: 0.0002
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001

@@ -304,6 +304,7 @@ class HybridEncoder(nn.Module):
                  eval_spatial_size=None,
                  version='dfine',
                  distill_teacher_dim=0,
+                 racofd_expose_f5=False,
                  ):
         super().__init__()
         self.in_channels = in_channels
@@ -316,6 +317,7 @@ class HybridEncoder(nn.Module):
         self.out_channels = [hidden_dim for _ in range(len(in_channels))]
         self.out_strides = feat_strides
         self.distill_teacher_dim = distill_teacher_dim
+        self.racofd_expose_f5 = racofd_expose_f5
 
         assert len(use_encoder_idx) > 0, "use_encoder_idx must specify at least one encoder output"
         # target AIFI output F5 for distillation
@@ -388,8 +390,8 @@ class HybridEncoder(nn.Module):
                 pos_embed = self.build_2d_sincos_position_embedding(
                     self.eval_spatial_size[1] // stride, self.eval_spatial_size[0] // stride,
                     self.hidden_dim, self.pe_temperature)
-                setattr(self, f'pos_embed{idx}', pos_embed)
-                # self.register_buffer(f'pos_embed{idx}', pos_embed)
+                # setattr(self, f'pos_embed{idx}', pos_embed)
+                self.register_buffer(f'pos_embed{idx}', pos_embed, persistent=False)
 
     @staticmethod
     def build_2d_sincos_position_embedding(w, h, embed_dim=256, temperature=10000., device=None):
@@ -459,5 +461,9 @@ class HybridEncoder(nn.Module):
             outs.append(out)
 
         if self.training and distill_student_output is not None:
+            if self.racofd_expose_f5:
+                # Shared detection path before the distillation projector; required
+                # for task-gradient evidence, unlike the projector-only output.
+                return outs, distill_student_output, proj_feats[self.encoder_idx_for_distillation]
             return outs, distill_student_output
         return outs

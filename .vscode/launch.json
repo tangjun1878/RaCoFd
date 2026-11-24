@@ -1,0 +1,97 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        
+      {
+            "name": "train",
+            "type": "python",
+            "request": "launch",
+           "python": "C:/ProgramData/miniconda3/envs/rtdetrv4/python.exe", // 指定python解释器
+            "program": "${workspaceFolder}/train.py",
+            
+            "console": "integratedTerminal",
+            "justMyCode": true, 
+            "args": [ 
+         
+            
+            ],
+            "env": {                  // 设置环境变量
+                    "CUDA_VISIBLE_DEVICES": "0",
+                    // "TORCH_DISTRIBUTED_DEBUG":"DETAIL"
+                    }
+    
+        },
+
+        {
+            "name": "predect",
+            "type": "python",
+            "request": "launch",
+            // "python": "/home/hncy/anaconda3/envs/rt/bin/python", // 指定python解释器
+            "program": "/home/hncy/anaconda3/envs/langchain/bin/torchrun",
+            "console": "integratedTerminal",
+            "justMyCode": true, 
+            "args": [ 
+    
+            "--master_port", "12341",
+            "--nproc_per_node", "1", 
+            // "/extend_disk/d2/tj/project/PromptNet/PromptNet-master/tools/rtdetrv2_infer_cls.py",
+            "/extend_disk/d2/tj/project/PromptNet/PromptNet-master/tools/predect.py",
+           
+    
+            ],
+            "env": {                  // 设置环境变量
+                    "CUDA_VISIBLE_DEVICES": "1"
+                    }
+    
+        },
+
+
+    
+    {
+            "name": "gradcam",
+            "type": "python",
+            "request": "launch",
+           "python": "C:/ProgramData/miniconda3/envs/dinov3/python.exe", // 指定python解释器
+            "program": "${workspaceFolder}/gradcam.py",
+            
+            "console": "integratedTerminal",
+            "justMyCode": true, 
+            "args": [ 
+         
+            
+            ],
+            "env": {                  // 设置环境变量
+                    "CUDA_VISIBLE_DEVICES": "1",
+                    // "TORCH_DISTRIBUTED_DEBUG":"DETAIL"
+                    }
+    
+        },
+        {
+            "name": "demo",
+            "type": "python",
+            "request": "launch",
+           "python": "C:/ProgramData/miniconda3/envs/dinov3/python.exe", // 指定python解释器
+            "program": "${workspaceFolder}/try.py",
+            
+            "console": "integratedTerminal",
+            "justMyCode": true, 
+            "args": [ 
+         
+            
+            ],
+            "env": {                  // 设置环境变量
+                    "CUDA_VISIBLE_DEVICES": "1",
+                    // "TORCH_DISTRIBUTED_DEBUG":"DETAIL"
+                    }
+    
+        }
+
+
+
+
+
+    ]
+}

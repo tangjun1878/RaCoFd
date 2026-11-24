@@ -6,6 +6,7 @@ Copyright (c) 2024 The DEIM Authors. All Rights Reserved.
 from . import optim
 from . import data
 from . import rtv4
+from . import RaCoFD  # RaCoFD teacher and criterion registrations
 
 from .backbone import *
 

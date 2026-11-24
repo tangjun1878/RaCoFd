@@ -60,6 +60,11 @@ def train_one_epoch(self_lr_scheduler, lr_scheduler, model: torch.nn.Module, cri
     cur_iters = epoch * len(data_loader)
 
     teacher_model = kwargs.get('teacher_model', None)
+    teacher_detect_model = kwargs.get('teacher_detect_model', None)
+    if teacher_detect_model is not None:
+        teacher_detect_model.eval()
+    if teacher_model is not None:
+        teacher_model.eval()
 
     for i, (samples, targets) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         samples = samples.to(device)
@@ -69,11 +74,29 @@ def train_one_epoch(self_lr_scheduler, lr_scheduler, model: torch.nn.Module, cri
 
         teacher_encoder_output_for_distillation = None
         if teacher_model is not None:
-            with torch.no_grad():
+            with torch.no_grad(): # 走dinov3的教师模型,sample就是rtdetr的图像输入
                 teacher_encoder_output_for_distillation = teacher_model(samples).detach()
+        # The detector teacher emits a dictionary of logits/boxes/(optional) features,
+        # not a single tensor: each tensor is already detached by no_grad().
+        teacher_detect_encoder_output_for_distillation = None
+        if teacher_detect_model is not None:
+            with torch.no_grad():
+                teacher_detect_encoder_output_for_distillation = teacher_detect_model(samples)
 
+        teacher_vfm_flip_features = None
+        if (teacher_model is not None and
+                getattr(criterion, 'racofd_flip_consistency', False)):
+            with torch.no_grad():
+                teacher_vfm_flip_features = torch.flip(
+                    teacher_model(torch.flip(samples, dims=[-1])), dims=[-1]
+                ).detach()
+
+        racofd_kwargs = {
+            'teacher_detect_outputs': teacher_detect_encoder_output_for_distillation,
+            'teacher_vfm_flip_features': teacher_vfm_flip_features,
+        }
         if scaler is not None:
-            with torch.autocast(device_type=str(device), cache_enabled=True):
+            with torch.autocast(device_type=device.type, cache_enabled=True):
                 outputs = model(samples, targets=targets,
                                 teacher_encoder_output=teacher_encoder_output_for_distillation)
 
@@ -87,8 +110,8 @@ def train_one_epoch(self_lr_scheduler, lr_scheduler, model: torch.nn.Module, cri
                 new_state['model'] = state
                 dist_utils.save_on_master(new_state, "./NaN.pth")
 
-            with torch.autocast(device_type=str(device), enabled=False):
-                loss_dict = criterion(outputs, targets, **metas)
+            with torch.autocast(device_type=device.type, enabled=False):
+                loss_dict = criterion(outputs, targets, **racofd_kwargs, **metas)
 
             loss = sum(loss_dict.values())
             scaler.scale(loss).backward()
@@ -111,7 +134,7 @@ def train_one_epoch(self_lr_scheduler, lr_scheduler, model: torch.nn.Module, cri
         else:
             outputs = model(samples, targets=targets,
                             teacher_encoder_output=teacher_encoder_output_for_distillation) # NEW kwarg
-            loss_dict = criterion(outputs, targets, **metas)
+            loss_dict = criterion(outputs, targets, **racofd_kwargs, **metas)
 
             loss : torch.Tensor = sum(loss_dict.values())
             optimizer.zero_grad()
@@ -141,6 +164,7 @@ def train_one_epoch(self_lr_scheduler, lr_scheduler, model: torch.nn.Module, cri
 
         loss_dict_reduced = dist_utils.reduce_dict(loss_dict)
         loss_value = sum(loss_dict_reduced.values())
+        loss_value = loss_value.detach() if torch.is_tensor(loss_value) else loss_value
 
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))

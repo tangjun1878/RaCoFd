@@ -85,6 +85,11 @@ class BaseConfig(object):
 
         # distillation: General distillation control switch
         self._teacher_model: nn.Module = None
+        self._teacher_detect_model: nn.Module = None
+
+    @property
+    def teacher_detect_model(self, ) -> nn.Module:
+        return self._teacher_detect_model
 
     @property
     def model(self, ) -> nn.Module:

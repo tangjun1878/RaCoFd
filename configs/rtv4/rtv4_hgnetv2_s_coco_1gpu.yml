@@ -1,0 +1,32 @@
+__include__: [
+  './rtv4_hgnetv2_s_coco.yml'
+]
+
+# Single-GPU (RTX 3090 24GB) training config for RT-DETRv4-S.
+# Official recipe: 4 GPUs x 8 = total batch 32.
+# Here: total batch 16, LR scaled linearly (x 16/32 = 1/2).
+# Launch with: python train.py -c configs/rtv4/rtv4_hgnetv2_s_coco_1gpu.yml --use-amp --seed=0 -t weights/rtv4_hgnetv2_s_coco.pth
+
+output_dir: ./runs/rtv4_hgnetv2_s_coco_1gpu
+
+train_dataloader:
+  total_batch_size: 4
+  num_workers: 2
+
+val_dataloader:
+  total_batch_size: 4
+  num_workers: 2
+
+optimizer:
+  type: AdamW
+  params:
+    -
+      params: '^(?=.*backbone)(?!.*bn).*$'
+      lr: 0.0001
+    -
+      params: '^(?=.*(?:norm|bn)).*$'
+      weight_decay: 0.
+
+  lr: 0.0002
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001

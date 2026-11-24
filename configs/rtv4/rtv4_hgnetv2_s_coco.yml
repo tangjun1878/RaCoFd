@@ -3,7 +3,7 @@ __include__: [
   '../base/rtv4.yml'
 ]
 
-output_dir: ./outputs/rtv4_hgnetv2_s_coco
+output_dir: ./runs/rtv4_hgnetv2_s_coco
 
 teacher_model:
   type: "DINOv3TeacherModel"

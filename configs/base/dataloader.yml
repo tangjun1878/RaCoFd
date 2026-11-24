@@ -14,7 +14,7 @@ train_dataloader:
         - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
       policy:
         name: stop_epoch
-        epoch: 72 # epoch in [71, ~) stop `ops`
+        epoch: 12 # epoch in [71, ~) stop `ops`
         ops: ['Mosaic', 'RandomPhotometricDistort', 'RandomZoomOut', 'RandomIoUCrop']
 
   collate_fn:
