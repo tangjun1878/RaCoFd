@@ -42,6 +42,24 @@ class DetSolver(BaseSolver):
 
         top1 = 0
         best_stat = {'epoch': -1, }
+        initial_ap = None
+        if args.yaml_cfg.get('evaluate_before_tuning', False) and args.tuning and not args.resume:
+            print('[RaCoFD] Evaluating loaded S checkpoint BEFORE optimization (COCO baseline)')
+            module = self.ema.module if self.ema else self.model
+            initial_stats, _ = evaluate(module, self.criterion, self.postprocessor,
+                                        self.val_dataloader, self.evaluator, self.device)
+            initial_ap = float(initial_stats['coco_eval_bbox'][0])
+            print(f'[RaCoFD] Initial S AP = {100 * initial_ap:.3f}')
+            if self.output_dir and dist_utils.is_main_process():
+                with (self.output_dir / 'initial_student_eval.json').open('w') as f:
+                    json.dump({'epoch': -1, 'checkpoint': args.tuning,
+                               **initial_stats}, f, indent=2)
+            # Do not count this untrained-in-this-run model as best trained RaCoFD.
+        elif args.resume and self.output_dir:
+            initial_path = self.output_dir / 'initial_student_eval.json'
+            if initial_path.is_file():
+                with initial_path.open() as f:
+                    initial_ap = float(json.load(f)['coco_eval_bbox'][0])
         # evaluate again before resume training
         if self.last_epoch > 0:
             module = self.ema.module if self.ema else self.model
@@ -111,9 +129,12 @@ class DetSolver(BaseSolver):
                 reason = 'unchanged'
 
                 if avg_percentage < 1e-6:
-                    if default_weight is not None:
-                        new_weight = default_weight
-                        reason = 'reset_to_default_zero_grad'
+                    # A zero percentage may mean no matching encoder gradients
+                    # (e.g. a frozen encoder). Jumping from 5 to the default 20
+                    # is unsafe without a valid measurement; preserve the
+                    # current coefficient and report the missing evidence.
+                    new_weight = current_weight
+                    reason = 'keep_weight_no_measurable_encoder_grad'
                 elif epoch >= self.train_dataloader.collate_fn.stop_epoch:
                     if default_weight is not None:
                         new_weight = default_weight
@@ -140,6 +161,20 @@ class DetSolver(BaseSolver):
                 if abs(new_weight - current_weight) > 0:
                     self.criterion.weight_dict['loss_distill'] = new_weight
                 print(f"Epoch {epoch}: avg encoder grad {avg_percentage:.2f}% | distill {current_weight:.6f} -> {new_weight:.6f} ({reason})")
+
+            # Criterion is not wrapped in DDP. Previously GAM updated only
+            # rank 0, so different ranks could optimize DIFFERENT DINO losses.
+            # Synchronize the scalar after rank 0 makes its decision.
+            if (hasattr(self.criterion, 'distill_adaptive_params') and
+                    self.criterion.distill_adaptive_params and
+                    self.criterion.distill_adaptive_params.get('enabled', False) and
+                    torch.distributed.is_available() and
+                    torch.distributed.is_initialized()):
+                synced = torch.tensor(
+                    [float(self.criterion.weight_dict.get('loss_distill', 0.0))],
+                    dtype=torch.float64, device=self.device)
+                torch.distributed.broadcast(synced, src=0)
+                self.criterion.weight_dict['loss_distill'] = float(synced.item())
 
             if self.output_dir and epoch < self.train_dataloader.collate_fn.stop_epoch:
                 checkpoint_paths = [self.output_dir / 'last.pth']
@@ -204,9 +239,14 @@ class DetSolver(BaseSolver):
                 **{f'train_{k}': v for k, v in train_stats.items()},
                 **{f'test_{k}': v for k, v in test_stats.items()},
                 'epoch': epoch,
-                'n_parameters': n_parameters
+                'n_parameters': n_parameters,
+                # Value used at the START of the next epoch, after GAM update.
+                'gam_weight_next_epoch': float(self.criterion.weight_dict.get('loss_distill', 0.0)),
             }
 
+            if initial_ap is not None and 'coco_eval_bbox' in test_stats:
+                log_stats['initial_student_ap'] = initial_ap
+                log_stats['ap_delta_vs_initial_student'] = float(test_stats['coco_eval_bbox'][0]) - initial_ap
             if self.output_dir and dist_utils.is_main_process():
                 with (self.output_dir / "log.txt").open("a") as f:
                     f.write(json.dumps(log_stats) + "\n")

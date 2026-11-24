@@ -1,0 +1,8 @@
+# Same response KD gates and ROI KD; only complementary modulation disabled.
+__include__: ['./racofd_hgnetv2_s_coco_finetune_noaug.yml']
+output_dir: ./runs/racofd_s_coco_pretrained_reliable
+RaCoFDCriterion:
+  racofd:
+    complement_alpha: 0.0
+    gradient_evidence: False
+    flip_consistency: False

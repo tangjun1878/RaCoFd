@@ -52,6 +52,9 @@ class BaseSolver(object):
         else:
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+        if (train_mode and cfg.yaml_cfg.get('strict_coco_tuning', False)
+                and not (cfg.tuning or cfg.resume)):
+            raise ValueError('COCO fine-tuning requires -t <trained RT-DETRv4-S checkpoint> or -r <RaCoFD resume checkpoint>')
         self.model = cfg.model
 
         # Setup teacher model
@@ -193,10 +196,27 @@ class BaseSolver(object):
         module = dist_utils.de_parallel(self.model)
 
         # Load the appropriate state dict
-        if 'ema' in state:
-            pretrain_state_dict = state['ema']['module']
+        if 'ema' in state and isinstance(state['ema'], dict):
+            pretrain_state_dict = state['ema'].get('module', state['ema'])
         else:
-            pretrain_state_dict = state['model']
+            pretrain_state_dict = state.get('model', state.get('state_dict', state))
+        if isinstance(pretrain_state_dict, nn.Module):
+            pretrain_state_dict = pretrain_state_dict.state_dict()
+        pretrain_state_dict = remove_module_prefix(pretrain_state_dict)
+
+        if self.cfg.yaml_cfg.get('strict_coco_tuning', False):
+            # Same architecture and same COCO labels: no cross-dataset head remapping.
+            # Allow only the training-only VFM projector and BN tracking counter
+            # to be absent. Inference weights/BN statistics must match exactly.
+            stat, infos = self._matched_state(module.state_dict(), pretrain_state_dict)
+            missing = infos['missed'] + infos['unmatched']
+            critical = [k for k in missing if not (
+                k.startswith('encoder.feature_projector.') or k.endswith('num_batches_tracked'))]
+            if critical:
+                raise RuntimeError(f'COCO S checkpoint incompatible: {len(critical)} missing/mismatched keys: {critical[:20]}')
+            module.load_state_dict(stat, strict=False)
+            print(f'[RaCoFD] Loaded COCO S checkpoint; {len(stat)} matched tensors; optional missing={missing}')
+            return
 
         # Adjust head parameters between datasets
         try:

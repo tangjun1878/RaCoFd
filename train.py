@@ -63,7 +63,7 @@ if __name__ == '__main__':
     # priority 0
     parser.add_argument('-c', '--config', type=str, default='configs/racofd/racofd_hgnetv2_s_coco_1gpu.yml')
     parser.add_argument('-r', '--resume', type=str, help='resume from checkpoint')
-    parser.add_argument('-t', '--tuning', type=str, default='weights/rtv4_hgnetv2_s_coco.pth',help='tuning from checkpoint')
+    parser.add_argument('-t', '--tuning', type=str, default="weights/rtv4_hgnetv2_s_coco.pth", help='tuning from checkpoint (default COCO S when not resuming)')
     parser.add_argument('-d', '--device', type=str, help='device',)
     parser.add_argument('--seed', type=int, help='exp reproducibility')
     parser.add_argument('--use-amp',default=True, help='auto mixed precision training')
@@ -80,5 +80,6 @@ if __name__ == '__main__':
 
     parser.add_argument('--local-rank', type=int, help='local rank id')
     args = parser.parse_args()
+
 
     main(args)

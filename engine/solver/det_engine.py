@@ -31,8 +31,11 @@ def _compute_encoder_transformer_grad_percentage(model: torch.nn.Module) -> floa
             continue
         val = grad.detach().abs().sum().item()
         total_l1 += val
-        # Support both DDP ('module.') and non-DDP naming
-        if name.startswith('module.encoder.encoder'):
+        # Normalize the optional DistributedDataParallel prefix. On a single
+        # GPU, parameters start with 'encoder.encoder', not 'module.encoder.encoder'.
+        # The old condition returned 0% for every non-DDP training run.
+        normalized_name = name.removeprefix('module.')
+        if normalized_name.startswith('encoder.encoder.'):
             enc_l1 += val
     if total_l1 <= 0.0 or not math.isfinite(total_l1):
         return 0.0
@@ -173,6 +176,15 @@ def train_one_epoch(self_lr_scheduler, lr_scheduler, model: torch.nn.Module, cri
 
         metric_logger.update(loss=loss_value, **loss_dict_reduced)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+        # 'lr' above is only param_group[0], commonly the backbone LR.
+        # The detection head often uses a different, larger LR.
+        group_lrs = [float(pg['lr']) for pg in optimizer.param_groups]
+        metric_logger.update(lr_max=max(group_lrs), lr_min=min(group_lrs))
+        # RaCoFD statistics are observations, NEVER loss terms: do not add
+        # them to loss_dict (train_one_epoch sums all loss_dict values).
+        diagnostic_values = getattr(criterion, 'racofd_diagnostics', None)
+        if diagnostic_values:
+            metric_logger.update(**diagnostic_values)
 
         if writer and dist_utils.is_main_process() and global_step % 10 == 0:
             writer.add_scalar('Loss/total', loss_value.item(), global_step)

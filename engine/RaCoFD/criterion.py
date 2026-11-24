@@ -22,6 +22,31 @@ from ..rtv4.rtv4_criterion import RTv4Criterion
 from ..rtv4.box_ops import box_cxcywh_to_xyxy
 
 
+# Constant diagnostics across every batch and distributed rank. MetricLogger
+# synchronizes all meter keys collectively; variable keys can deadlock DDP
+# when one rank happens to receive an image without GT objects.
+_RACOFD_DIAG_KEYS = (
+    'racofd_gt_objects_per_batch',
+    'racofd_matched_gt_fraction',
+    'racofd_teacher_cls_accuracy',
+    'racofd_teacher_gt_prob',
+    'racofd_teacher_box_iou',
+    'racofd_student_box_iou',
+    'racofd_student_cls_accuracy',
+    'racofd_cls_kd_active_fraction',
+    'racofd_box_kd_active_fraction',
+    'racofd_new_kd_scale',
+    'racofd_reliable_cls_fraction',
+    'racofd_reliable_box_fraction',
+    'racofd_inst_vfm_raw',
+    'racofd_vfm_stability',
+    'racofd_gt_grad_agree_cls',
+    'racofd_gt_grad_agree_box',
+    'racofd_complement_multiplier',
+    'racofd_complement_active_fraction',
+)
+
+
 def aligned_iou_cxcywh(a: torch.Tensor, b: torch.Tensor, eps: float = 1e-6):
     """Pairwise-aligned IoU for [N,4] normalized cxcywh (not full NxN IoU)."""
     a = box_cxcywh_to_xyxy(a.float())
@@ -118,6 +143,15 @@ class RaCoFDCriterion(RTv4Criterion):
         cfg = dict(racofd or {})
         self.use_detector_kd = bool(cfg.get('detector_kd', True))
         self.use_reliability_filtering = bool(cfg.get('reliability_filtering', True))
+        # For a converged COCO student, X is not necessarily better on every GT.
+        # Optional extra gate applies to response KD only, not the VFM evidence.
+        self.student_relative_kd = bool(cfg.get('student_relative_kd', False))
+        self.cls_advantage_margin = float(cfg.get('cls_advantage_margin', 0.02))
+        self.box_advantage_margin = float(cfg.get('box_advantage_margin', 0.02))
+        self.new_kd_warmup_epochs = float(cfg.get('new_kd_warmup_epochs', 0.0))
+        if min(self.cls_advantage_margin, self.box_advantage_margin,
+               self.new_kd_warmup_epochs) < 0:
+            raise ValueError('RaCoFD advantage margins and warmup must be nonnegative')
         self.use_instance_vfm = bool(cfg.get('instance_vfm', True))
         self.use_grad_evidence = bool(cfg.get('gradient_evidence', True))
         self.racofd_flip_consistency = bool(cfg.get('flip_consistency', True))
@@ -140,6 +174,7 @@ class RaCoFDCriterion(RTv4Criterion):
         if self.cls_weight < 0 or self.box_weight < 0 or self.instance_weight < 0:
             raise ValueError('RaCoFD weights must be nonnegative')
         self._ra_step = 0
+        self.racofd_diagnostics = {}  # logging only; not part of loss_dict
         # Non-persistent class-specific sampled evidence for skipped steps.
         self.register_buffer('_ra_cls_prior', torch.zeros(num_classes), persistent=False)
         self.register_buffer('_ra_box_prior', torch.zeros(num_classes), persistent=False)
@@ -175,6 +210,9 @@ class RaCoFDCriterion(RTv4Criterion):
         reliab_cls = [torch.zeros(len(t['labels']), device=dev) for t in targets]
         reliab_box = [torch.zeros(len(t['labels']), device=dev) for t in targets]
         batch, squery, tquery, gtidx = self._match_teacher_student(outputs, teacher, targets)
+        total_gt = sum(len(t['labels']) for t in targets)
+        self.racofd_diagnostics['racofd_gt_objects_per_batch'] = float(total_gt)
+        self.racofd_diagnostics['racofd_matched_gt_fraction'] = float(batch.numel() / max(total_gt, 1))
         if batch.numel() == 0:
             return {'loss_racofd_cls': zero, 'loss_racofd_box': zero}, reliab_cls, reliab_box
 
@@ -191,8 +229,16 @@ class RaCoFDCriterion(RTv4Criterion):
             gt_p = p.gather(1, gt_labels[:, None]).squeeze(1)
             rcls = (torch.argmax(tl, dim=-1) == gt_labels).float() * gt_p
             rcls = torch.where(gt_p >= self.cls_min_conf, rcls, rcls.new_zeros(()))
-            rbox = aligned_iou_cxcywh(tb, gt_boxes).detach()
-            rbox = torch.where(rbox >= self.box_min_iou, rbox, rbox.new_zeros(()))
+            true_cls_acc = (torch.argmax(tl, dim=-1) == gt_labels).float().mean()
+            true_box_iou = aligned_iou_cxcywh(tb, gt_boxes).detach()
+            rbox = torch.where(true_box_iou >= self.box_min_iou, true_box_iou, true_box_iou.new_zeros(()))
+            self.racofd_diagnostics.update({
+                'racofd_teacher_cls_accuracy': float(true_cls_acc.item()),
+                'racofd_teacher_gt_prob': float(gt_p.mean().item()),
+                'racofd_teacher_box_iou': float(true_box_iou.mean().item()),
+                'racofd_reliable_cls_fraction': float((rcls > 0).float().mean().item()),
+                'racofd_reliable_box_fraction': float((rbox > 0).float().mean().item()),
+            })
             # True naive-dual ablation: no teacher-quality filtering.
             if not self.use_reliability_filtering:
                 rcls = torch.ones_like(rcls)
@@ -201,12 +247,30 @@ class RaCoFDCriterion(RTv4Criterion):
                 reliab_cls[bi][gi] = rcls[n]
                 reliab_box[bi][gi] = rbox[n]
 
+            # Preserve the teacher-only reliability vectors above for EGCM.
+            # A stronger student's box should not be pulled towards a worse X box.
+            student_correct = sl.detach().argmax(dim=-1) == gt_labels
+            student_gt_p = sl.detach().float().sigmoid().gather(1, gt_labels[:, None]).squeeze(1)
+            student_iou = aligned_iou_cxcywh(sb.detach(), gt_boxes)
+            cls_kd_weight, box_kd_weight = rcls, rbox
+            if self.student_relative_kd and self.use_reliability_filtering:
+                cls_advantage = (~student_correct) | (gt_p > student_gt_p + self.cls_advantage_margin)
+                box_advantage = true_box_iou > student_iou + self.box_advantage_margin
+                cls_kd_weight = rcls * cls_advantage.float()
+                box_kd_weight = rbox * box_advantage.float()
+            self.racofd_diagnostics.update({
+                'racofd_student_box_iou': float(student_iou.mean().item()),
+                'racofd_student_cls_accuracy': float(student_correct.float().mean().item()),
+                'racofd_cls_kd_active_fraction': float((cls_kd_weight > 0).float().mean().item()),
+                'racofd_box_kd_active_fraction': float((box_kd_weight > 0).float().mean().item()),
+            })
+
         if self.use_detector_kd:
             per_class_kl = bernoulli_kl_from_logits(sl, tl, self.temperature)
-            loss_cls = self.cls_weight * (per_class_kl * rcls).sum() / max(len(batch), 1)
+            loss_cls = self.cls_weight * (per_class_kl * cls_kd_weight).sum() / max(len(batch), 1)
             per_box = (F.smooth_l1_loss(sb.float(), tb.float(), reduction='none').sum(-1)
                        + (1 - aligned_giou_cxcywh(sb, tb)))
-            loss_box = self.box_weight * (per_box * rbox).sum() / max(len(batch), 1)
+            loss_box = self.box_weight * (per_box * box_kd_weight).sum() / max(len(batch), 1)
         else:
             loss_cls, loss_box = zero, zero
         return {'loss_racofd_cls': loss_cls, 'loss_racofd_box': loss_box}, reliab_cls, reliab_box
@@ -311,6 +375,14 @@ class RaCoFDCriterion(RTv4Criterion):
         evidence = stability.detach() * ((1-rcls)*ac + (1-rbox)*ab) / 2
         weights = (1 + self.complement_alpha * evidence.detach()).clamp(
             min=1, max=max(self.max_extra_weight, 1.0))
+        self.racofd_diagnostics.update({
+            'racofd_inst_vfm_raw': float(per_inst.detach().mean().item()),
+            'racofd_vfm_stability': float(stability.detach().mean().item()),
+            'racofd_gt_grad_agree_cls': float(ac.detach().mean().item()),
+            'racofd_gt_grad_agree_box': float(ab.detach().mean().item()),
+            'racofd_complement_multiplier': float(weights.detach().mean().item()),
+            'racofd_complement_active_fraction': float((weights.detach() > 1.001).float().mean().item()),
+        })
         return self.instance_weight * (per_inst * weights).mean()
 
     def _detector_feature_kd(self, outputs, teacher):
@@ -330,6 +402,8 @@ class RaCoFDCriterion(RTv4Criterion):
 
     def forward(self, outputs, targets, teacher_detect_outputs=None,
                 teacher_vfm_flip_features=None, **kwargs):
+        # Per-step statistics are not losses and must not leak across iterations.
+        self.racofd_diagnostics = {name: 0.0 for name in _RACOFD_DIAG_KEYS}
         # RT-DETRv4 original criterion, unchanged (including DSI/GAM and auxiliary losses).
         losses = super().forward(outputs, targets, **kwargs)
         if not self.training:
@@ -350,4 +424,14 @@ class RaCoFDCriterion(RTv4Criterion):
                 cls_reliable, box_reliable, losses)
         if self.use_detector_feature:
             losses['loss_racofd_xfeat'] = self._detector_feature_kd(outputs, teacher_detect_outputs)
+        # Gradually introduce *new* RaCoFD supervision, keeping GT and original
+        # DINO/DSI losses unchanged. The engine passes epoch/step/epoch_step.
+        scale = 1.0
+        if self.new_kd_warmup_epochs > 0:
+            progress = float(kwargs.get('epoch', 0)) + (float(kwargs.get('step', 0)) + 1) / max(float(kwargs.get('epoch_step', 1)), 1.0)
+            scale = min(1.0, max(0.0, progress / self.new_kd_warmup_epochs))
+        self.racofd_diagnostics['racofd_new_kd_scale'] = scale
+        for key in tuple(losses):
+            if key.startswith('loss_racofd_'):
+                losses[key] = losses[key] * scale
         return losses

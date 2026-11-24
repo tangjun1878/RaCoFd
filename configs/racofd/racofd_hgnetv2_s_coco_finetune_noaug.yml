@@ -1,0 +1,24 @@
+# Full RaCoFD, COCO pretrained S + X. New output directory avoids mixing old logs.
+__include__: ['./racofd_hgnetv2_s_coco.yml', './_coco_pretrained_s_finetune.yml']
+output_dir: ./runs/racofd_s_coco_pretrained_full
+
+# Fixed, conservative DINO supervision; avoid 5 -> 20 GAM jump.
+RaCoFDCriterion:
+  weight_dict:
+    loss_distill: 1.0
+  distill_adaptive_params:
+    enabled: False
+  racofd:
+    detector_kd: True
+    reliability_filtering: True
+    student_relative_kd: True
+    cls_advantage_margin: 0.02
+    box_advantage_margin: 0.02
+    cls_weight: 2.0
+    box_weight: 0.5
+    instance_vfm: True
+    instance_weight: 0.1
+    gradient_evidence: True
+    flip_consistency: True
+    complement_alpha: 1.0
+    new_kd_warmup_epochs: 2.0

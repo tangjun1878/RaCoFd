@@ -1,0 +1,10 @@
+# Same recipe, simple dual-teacher KD: no reliability, ROI or EGCM.
+__include__: ['./racofd_hgnetv2_s_coco_finetune_noaug.yml']
+output_dir: ./runs/racofd_s_coco_pretrained_naive
+RaCoFDCriterion:
+  racofd:
+    reliability_filtering: False
+    student_relative_kd: False
+    instance_vfm: False
+    gradient_evidence: False
+    flip_consistency: False

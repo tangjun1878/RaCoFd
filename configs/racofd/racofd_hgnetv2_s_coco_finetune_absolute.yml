@@ -1,0 +1,7 @@
+# Paper's original absolute teacher-reliability gate (no student-relative gate).
+# Use to isolate the newly proposed fine-tuning gate under the same schedule.
+__include__: ['./racofd_hgnetv2_s_coco_finetune_noaug.yml']
+output_dir: ./runs/racofd_s_coco_pretrained_absolute_gate
+RaCoFDCriterion:
+  racofd:
+    student_relative_kd: False

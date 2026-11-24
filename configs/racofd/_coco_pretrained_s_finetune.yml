@@ -1,0 +1,60 @@
+# Shared controlled COCO-to-COCO fine-tuning recipe (include only).
+# Student: trained RT-DETRv4-S COCO; X and DINO teachers stay frozen.
+strict_coco_tuning: True
+evaluate_before_tuning: True
+
+epoches: 24
+flat_epoch: 4
+no_aug_epoch: 6  # final low-LR period in flatcosine scheduler
+warmup_iter: 200
+lr_gamma: 0.2
+lr_warmup_scheduler:
+  warmup_duration: 200
+
+# Preserve the loaded detector with a smaller step size than full training.
+optimizer:
+  type: AdamW
+  params:
+    - params: '^(?=.*backbone)(?!.*(?:norm|bn)).*$'
+      lr: 0.00001
+    - params: '^(?=.*backbone)(?=.*(?:norm|bn)).*$'
+      lr: 0.00001
+      weight_decay: 0.0
+    - params: '^(?!.*backbone)(?=.*(?:norm|bn)).*$'
+      weight_decay: 0.0
+  lr: 0.00002
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001
+
+# Initial EMA is a copy of the loaded COCO S. No from-scratch EMA ramp.
+ema:
+  decay: 0.999
+  warmups: 0
+
+# Keep the actual 1124 single-GPU batch; override with -u if needed.
+train_dataloader:
+  total_batch_size: 24
+  num_workers: 4
+  dataset:
+    transforms:
+      # Explicit weak augmentation: no Mosaic/MixUp/crop/zoom/multiscale.
+      ops:
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: RandomHorizontalFlip}
+        - {type: Resize, size: [640, 640]}
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+        - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
+      mosaic_prob: 0.0
+      policy:
+        name: default
+        epoch: [1000, 1001, 1002]
+        ops: []
+  collate_fn:
+    mixup_prob: 0.0
+    mixup_epochs: [1000, 1001]
+    base_size_repeat: null
+    stop_epoch: 100000  # no stage-2 rollback during fine-tuning
+val_dataloader:
+  total_batch_size: 24
+  num_workers: 4

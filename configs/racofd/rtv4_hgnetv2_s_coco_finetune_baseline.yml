@@ -1,0 +1,8 @@
+# DINO-only control: same trained S, schedule, DSI coefficient, batch and weak aug.
+__include__: ['../rtv4/rtv4_hgnetv2_s_coco.yml', './_coco_pretrained_s_finetune.yml']
+output_dir: ./runs/rtv4_s_coco_pretrained_dino_only
+RTv4Criterion:
+  weight_dict:
+    loss_distill: 1.0
+  distill_adaptive_params:
+    enabled: False
